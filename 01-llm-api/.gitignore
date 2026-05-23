@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# uv / виртуальное окружение
+.venv/
+venv/
+
+# Секреты (API-ключи в .env)
+.env
+.env.*
+!.env.example
+
+# Сборка и артефакты
+build/
+dist/
+*.egg-info/
+
+# Тесты и статический анализ
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Локальные заметки и временные файлы
+*.log
+*.tmp
