@@ -29,6 +29,16 @@ class ExtractedTransaction(BaseModel):
 class ParsedTextMessage(BaseModel):
     """Structured output для текстового сообщения."""
 
-    intent: MessageIntent
+    intent: MessageIntent = Field(
+        default="chat",
+        description="record_transaction, balance_query или chat",
+    )
+    transaction: ExtractedTransaction | None = None
+    reply: str = Field(min_length=1)
+
+
+class ParsedReceiptImage(BaseModel):
+    """Structured output для фото чека."""
+
     transaction: ExtractedTransaction | None = None
     reply: str = Field(min_length=1)

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import logging
 from typing import TypeVar
 
 from openai import AsyncOpenAI
+from openai.lib._parsing._completions import type_to_response_format_param
 from pydantic import BaseModel, ValidationError
 
 from basic_ai_assistant.config import Config
@@ -31,6 +33,7 @@ class LlmClient:
             api_key=config.openrouter_api_key,
         )
         self._model = config.model_text
+        self._vision_model = config.model_image
 
     async def generate_chat_reply(self, messages: list[dict]) -> str:
         """
@@ -85,12 +88,25 @@ class LlmClient:
         self,
         messages: list[dict],
         response_model: type[TModel],
+        model: str | None = None,
     ) -> TModel:
-        completion = await self._client.beta.chat.completions.parse(
-            model=self._model,
-            messages=messages,
-            response_format=response_model,
-        )
+        chosen_model = model or self._model
+        try:
+            completion = await self._client.beta.chat.completions.parse(
+                model=chosen_model,
+                messages=messages,
+                response_format=response_model,
+            )
+        except Exception as exc:
+            logger.warning(
+                "parse() не удался (%s), fallback на chat.completions.create",
+                exc,
+            )
+            return await self._request_structured_via_create(
+                messages,
+                response_model,
+                chosen_model,
+            )
 
         if not completion.choices:
             logger.error("LLM вернула ответ без choices")
@@ -103,6 +119,32 @@ class LlmClient:
         content = message.content or ""
         if not content:
             logger.error("LLM вернула пустой structured-ответ")
+            raise LlmClientError("Empty structured response")
+
+        return self._parse_structured_content(content, response_model)
+
+    async def _request_structured_via_create(
+        self,
+        messages: list[dict],
+        response_model: type[TModel],
+        model: str,
+    ) -> TModel:
+        response_format = type_to_response_format_param(response_model)
+        try:
+            completion = await self._client.chat.completions.create(
+                model=model,
+                messages=messages,
+                response_format=response_format,
+            )
+        except Exception as exc:
+            logger.exception("Ошибка fallback structured-запроса к LLM: %s", exc)
+            raise LlmClientError("LLM structured request failed") from exc
+
+        if not completion.choices:
+            raise LlmClientError("No choices in structured response")
+
+        content = completion.choices[0].message.content or ""
+        if not content:
             raise LlmClientError("Empty structured response")
 
         return self._parse_structured_content(content, response_model)
@@ -126,6 +168,50 @@ class LlmClient:
 
         logger.info(
             "Structured-ответ от LLM: %s",
+            parsed.model_dump_json()[:300],
+        )
+        return parsed
+
+    async def generate_vision_structured_reply(
+        self,
+        system_prompt: str,
+        image_bytes: bytes,
+        image_mime: str,
+        response_model: type[TModel],
+        user_text: str,
+    ) -> TModel:
+        """Vision structured completion через MODEL_IMAGE."""
+        image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{image_mime};base64,{image_b64}",
+                        },
+                    },
+                ],
+            },
+        ]
+
+        try:
+            parsed = await self._request_structured_completion(
+                messages,
+                response_model,
+                model=self._vision_model,
+            )
+        except LlmClientError:
+            raise
+        except Exception as exc:
+            logger.exception("Ошибка vision-запроса к LLM: %s", exc)
+            raise LlmClientError("LLM vision request failed") from exc
+
+        logger.info(
+            "Vision structured-ответ от LLM: %s",
             parsed.model_dump_json()[:300],
         )
         return parsed
