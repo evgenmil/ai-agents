@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from typing import TypeVar
 
@@ -33,13 +34,41 @@ class LlmClient:
         config: Config,
         trace: LlmTraceLogger | None = None,
     ) -> None:
+        self._base_url = config.openrouter_base_url
         self._client = AsyncOpenAI(
-            base_url=config.openrouter_base_url,
+            base_url=self._base_url,
             api_key=config.openrouter_api_key,
         )
         self._model = config.model_text
         self._vision_model = config.model_image
         self._trace = trace
+
+    def _is_ollama_backend(self) -> bool:
+        """Ollama (:11434) не поддерживает json_schema — падает с 503."""
+        return ":11434" in self._base_url
+
+    def _messages_with_json_schema_hint(
+        self,
+        messages: list[dict],
+        response_model: type[TModel],
+    ) -> list[dict]:
+        schema_text = json.dumps(
+            response_model.model_json_schema(),
+            ensure_ascii=False,
+        )
+        hint = (
+            "Ответь одним JSON-объектом без markdown и комментариев. "
+            f"Формат должен соответствовать JSON Schema:\n{schema_text}"
+        )
+        updated = [dict(m) for m in messages]
+        for i, msg in enumerate(updated):
+            if msg.get("role") == "system" and isinstance(msg.get("content"), str):
+                updated[i] = {
+                    **msg,
+                    "content": f"{msg['content']}\n\n{hint}",
+                }
+                return updated
+        return [{"role": "system", "content": hint}, *updated]
 
     def _write_trace(
         self,
@@ -115,6 +144,12 @@ class LlmClient:
         model: str | None = None,
     ) -> TModel:
         chosen_model = model or self._model
+        if self._is_ollama_backend():
+            return await self._request_structured_via_create(
+                messages,
+                response_model,
+                chosen_model,
+            )
         try:
             completion = await self._client.beta.chat.completions.parse(
                 model=chosen_model,
@@ -153,11 +188,19 @@ class LlmClient:
         response_model: type[TModel],
         model: str,
     ) -> TModel:
-        response_format = type_to_response_format_param(response_model)
+        if self._is_ollama_backend():
+            request_messages = self._messages_with_json_schema_hint(
+                messages,
+                response_model,
+            )
+            response_format: dict = {"type": "json_object"}
+        else:
+            request_messages = messages
+            response_format = type_to_response_format_param(response_model)
         try:
             completion = await self._client.chat.completions.create(
                 model=model,
-                messages=messages,
+                messages=request_messages,
                 response_format=response_format,
             )
         except Exception as exc:
