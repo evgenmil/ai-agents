@@ -28,9 +28,9 @@ STRUCTURED_OUTPUT_INSTRUCTION = """
 Ты анализируешь сообщение пользователя и возвращаешь структурированный ответ.
 
 Правила intent (поле intent обязательно):
-- record_transaction — пользователь сообщает о трате или доходе с достаточными данными (есть сумма).
-- balance_query — пользователь спрашивает баланс; transaction=null.
-- chat — обычный разговор, уточнение без новой записи, или данных для записи недостаточно.
+- record_transaction — новая трата или доход; достаточно данных (есть сумма); в т.ч. дополнение к ранее обсуждённому.
+- balance_query — вопрос о балансе; transaction=null.
+- chat — уточнение без новой записи, комментарий, обсуждение уже записанного; transaction=null.
 
 При intent=record_transaction заполни transaction:
 - direction: income или expense
@@ -92,6 +92,22 @@ class FinanceManager:
         return messages_payload
 
     @staticmethod
+    def _to_history_json(parsed: ParsedTextMessage | ParsedReceiptImage) -> str:
+        """Единый формат JSON в истории — всегда ParsedTextMessage с intent."""
+        if isinstance(parsed, ParsedTextMessage):
+            return parsed.model_dump_json()
+
+        intent: MessageIntent = (
+            "record_transaction" if parsed.transaction is not None else "chat"
+        )
+        entry = ParsedTextMessage(
+            intent=intent,
+            transaction=parsed.transaction,
+            reply=parsed.reply,
+        )
+        return entry.model_dump_json()
+
+    @staticmethod
     def _parse_datetime(value: str | None) -> datetime:
         if not value:
             return datetime.now(timezone.utc)
@@ -137,8 +153,8 @@ class FinanceManager:
 
     @staticmethod
     def _is_balance_query(text: str) -> bool:
-        lowered = text.lower()
-        return any(word in lowered for word in ("баланс", "сколько", "остаток"))
+        """Fallback: только явный запрос баланса, без эвристик вроде «сколько»."""
+        return "баланс" in text.lower()
 
     @staticmethod
     def _resolve_intent(parsed: ParsedTextMessage, user_text: str) -> MessageIntent:
@@ -198,11 +214,11 @@ class FinanceManager:
         else:
             reply = parsed.reply
 
-        # В историю сохраняем JSON, чтобы модель продолжала отвечать structured output.
+        # В историю — единый JSON (ParsedTextMessage), чтобы модель не путала схемы.
         session.messages.append(
             Message(
                 role="assistant",
-                text=parsed.model_dump_json(),
+                text=self._to_history_json(parsed),
                 created_at=now,
             )
         )
@@ -264,7 +280,7 @@ class FinanceManager:
         session.messages.append(
             Message(
                 role="assistant",
-                text=parsed.model_dump_json(),
+                text=self._to_history_json(parsed),
                 created_at=now,
             )
         )
