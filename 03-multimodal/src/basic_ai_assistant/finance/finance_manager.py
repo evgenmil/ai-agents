@@ -183,6 +183,7 @@ class FinanceManager:
             parsed = await self._llm_client.generate_structured_reply(
                 messages_payload,
                 ParsedTextMessage,
+                user_id=user_id,
             )
         except LlmClientError:
             logger.exception(
@@ -255,6 +256,7 @@ class FinanceManager:
                 image_mime=image_mime,
                 response_model=ParsedReceiptImage,
                 user_text=user_text,
+                user_id=user_id,
             )
         except LlmClientError:
             logger.exception(

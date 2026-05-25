@@ -36,6 +36,15 @@ class Config:
     model_text: str
     model_image: str
     system_prompt: str | None = None
+    llm_trace_enabled: bool = False
+    llm_trace_dir: str = "logs"
+
+    @staticmethod
+    def _parse_bool_env(name: str, default: bool = False) -> bool:
+        value = (os.environ.get(name) or "").strip().lower()
+        if not value:
+            return default
+        return value in ("1", "true", "yes", "on")
 
     @staticmethod
     def _load_system_prompt() -> str | None:
@@ -113,8 +122,15 @@ class Config:
 
         system_prompt = cls._load_system_prompt()
 
+        llm_trace_enabled = cls._parse_bool_env("LLM_TRACE_ENABLED")
+        llm_trace_dir = (os.environ.get("LLM_TRACE_DIR") or "logs").strip() or "logs"
+
         logger.info("MODEL_TEXT: %s", model_text)
         logger.info("MODEL_IMAGE: %s", model_image)
+        if llm_trace_enabled:
+            logger.info("LLM trace включён, каталог: %s", llm_trace_dir)
+        else:
+            logger.info("LLM trace выключен (LLM_TRACE_ENABLED не задан)")
 
         return cls(
             telegram_bot_token=telegram_bot_token,
@@ -123,4 +139,6 @@ class Config:
             model_text=model_text,
             model_image=model_image,
             system_prompt=system_prompt,
+            llm_trace_enabled=llm_trace_enabled,
+            llm_trace_dir=llm_trace_dir,
         )

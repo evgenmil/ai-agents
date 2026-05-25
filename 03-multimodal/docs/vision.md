@@ -262,6 +262,8 @@ LLM выбирает тип по контексту сообщения или ч
 | `MODEL_TEXT` | Модель для текста и structured output |
 | `MODEL_IMAGE` | Vision‑модель для обработки чеков |
 | `LOG_LEVEL` | Уровень логирования (`INFO`, `DEBUG`, `WARNING`) |
+| `LLM_TRACE_ENABLED` | `true` / `1` — полный trace запросов и ответов LLM в файлы `logs/llm_trace_{user_id}.txt` |
+| `LLM_TRACE_DIR` | Каталог trace-файлов; по умолчанию `logs` |
 
 Опционально:
 
