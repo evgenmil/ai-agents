@@ -9,6 +9,7 @@ from aiogram.types import Message
 
 from basic_ai_assistant.config import Config
 from basic_ai_assistant.finance.finance_manager import FinanceManager
+from basic_ai_assistant.speech.speech_client import SpeechClient, SpeechClientError
 
 
 logger = logging.getLogger(__name__)
@@ -21,9 +22,15 @@ class BotApp:
     Бот принимает текстовые сообщения и фото чеков, передаёт их в FinanceManager.
     """
 
-    def __init__(self, config: Config, finance_manager: FinanceManager) -> None:
+    def __init__(
+        self,
+        config: Config,
+        finance_manager: FinanceManager,
+        speech_client: SpeechClient | None = None,
+    ) -> None:
         self._config = config
         self._finance_manager = finance_manager
+        self._speech_client = speech_client
         self._bot = Bot(token=self._config.telegram_bot_token)
         self._dp = Dispatcher()
 
@@ -33,6 +40,7 @@ class BotApp:
         self._dp.message.register(self.handle_start, CommandStart())
         self._dp.message.register(self.handle_balance, Command("balance"))
         self._dp.message.register(self.handle_photo_message, F.photo)
+        self._dp.message.register(self.handle_voice_message, F.voice)
         self._dp.message.register(self.handle_text_message, F.text)
 
     async def handle_start(self, message: Message) -> None:
@@ -42,6 +50,7 @@ class BotApp:
             await message.answer(
                 "Привет! Я твой финансовый советник.\n"
                 "Расскажи о трате или доходе — например: «кофе 350».\n"
+                "Можно отправить голосовое — я расшифрую и учту как текст.\n"
                 "Или отправь фото чека — я извлеку сумму и детали.\n"
                 "Баланс: команда /balance или спроси «какой баланс?»."
             )
@@ -110,6 +119,114 @@ class BotApp:
         try:
             await message.answer(reply)
             logger.info("Ответ на фото отправлен пользователю %s", user_id)
+        except Exception:
+            logger.exception("Ошибка при отправке ответа пользователю %s", user_id)
+
+    async def handle_voice_message(self, message: Message) -> None:
+        if not message.voice:
+            return
+
+        user_id = message.from_user.id if message.from_user else 0
+        voice = message.voice
+        logger.info(
+            "Голосовое от пользователя %s (file_id=%s, %ss)",
+            user_id,
+            voice.file_id,
+            voice.duration,
+        )
+
+        if self._speech_client is None:
+            try:
+                await message.answer(
+                    "Голосовые сообщения пока не настроены. "
+                    "Напишите трату или доход текстом."
+                )
+            except Exception:
+                logger.exception(
+                    "Ошибка при отправке ответа о STT пользователю %s",
+                    user_id,
+                )
+            return
+
+        await self._bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+        try:
+            file_info = await self._bot.get_file(voice.file_id)
+            if not file_info.file_path:
+                await message.answer(
+                    "Не удалось получить голосовое из Telegram. Попробуйте ещё раз."
+                )
+                return
+
+            buffer = BytesIO()
+            await self._bot.download_file(file_info.file_path, destination=buffer)
+            audio_bytes = buffer.getvalue()
+        except Exception:
+            logger.exception("Ошибка при скачивании голосового пользователя %s", user_id)
+            try:
+                await message.answer(
+                    "Не удалось загрузить голосовое. Попробуйте ещё раз или напишите текстом."
+                )
+            except Exception:
+                logger.exception(
+                    "Ошибка при отправке сообщения об ошибке пользователю %s",
+                    user_id,
+                )
+            return
+
+        try:
+            transcript = await self._speech_client.transcribe(audio_bytes)
+            logger.info(
+                "Расшифровка голосового пользователя %s: %s",
+                user_id,
+                transcript[:200],
+            )
+        except SpeechClientError:
+            logger.exception("Ошибка STT для пользователя %s", user_id)
+            try:
+                await message.answer(
+                    "Не удалось расшифровать голосовое. "
+                    "Попробуйте записать ещё раз или напишите текстом."
+                )
+            except Exception:
+                logger.exception(
+                    "Ошибка при отправке сообщения об STT пользователю %s",
+                    user_id,
+                )
+            return
+        except Exception:
+            logger.exception("Неожиданная ошибка STT для пользователя %s", user_id)
+            try:
+                await message.answer("Произошла неожиданная ошибка. Попробуйте позже.")
+            except Exception:
+                logger.exception(
+                    "Ошибка при отправке сообщения об ошибке пользователю %s",
+                    user_id,
+                )
+            return
+
+        try:
+            reply = await self._finance_manager.handle_user_message(
+                user_id=user_id,
+                text=transcript,
+            )
+        except Exception:
+            logger.exception(
+                "Ошибка при обработке расшифровки пользователя %s",
+                user_id,
+            )
+            try:
+                await message.answer("Произошла неожиданная ошибка. Пожалуйста, попробуйте позже.")
+            except Exception:
+                logger.exception(
+                    "Ошибка при отправке сообщения об ошибке пользователю %s",
+                    user_id,
+                )
+            return
+
+        try:
+            await message.answer(reply)
+            logger.info("Ответ на голосовое отправлен пользователю %s", user_id)
         except Exception:
             logger.exception("Ошибка при отправке ответа пользователю %s", user_id)
 

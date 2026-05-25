@@ -16,6 +16,7 @@
 | 12 | Отчёт о балансе                       | Команда `/balance` и balance_query        | ✅ Выполнена |
 | 13 | Фото чеков через VLM                  | Обработка изображений, MODEL_IMAGE        | ✅ Выполнена |
 | 14 | Роль финансового советника            | System prompt, полный контекст диалога    | ✅ Выполнена |
+| 15 | Транскрибация голосовых сообщений     | Локальный Whisper на GPU, учёт как текст  | ⏳ В работе |
 
 ---
 
@@ -106,4 +107,21 @@
 - [x] System prompt — финансовый советник (стиль, правила учёта, список категорий).
 - [x] Полный контекст диалога передаётся в LLM.
 - [x] Проверка: уточняющий диалог («а вчерашний обед?») учитывает предыдущие реплики.
+
+## Итерация 15. Транскрибация голосовых сообщений
+
+**Деплой:** бот и STT на **разных** машинах; на GPU‑ВМ — HTTP‑сервис Whisper, на хосте бота — только `SPEECH_API_URL` (см. `docs/vision.md` §6.4).
+
+- [ ] Зависимости: `faster-whisper` + `httpx` (или встроенный клиент) в `pyproject.toml`; README — `ffmpeg`/CUDA только для STT‑сервера.
+- [ ] `speech/speech_server.py` — HTTP `POST /v1/transcribe` (multipart OGG), `ffmpeg` + Whisper на GPU; bind `SPEECH_HOST`.
+- [ ] `speech/speech_client.py` — HTTP‑клиент к `SPEECH_API_URL`; опционально `SPEECH_API_KEY`.
+- [ ] `speech/audio_converter.py` — OGG → WAV (используется **сервером**, не ботом).
+- [ ] `Config`: на боте — `SPEECH_API_URL`, `SPEECH_API_KEY`; на сервере — `SPEECH_MODEL`, `SPEECH_DEVICE`, `SPEECH_COMPUTE_TYPE`, `SPEECH_LANGUAGE`, `SPEECH_HOST`; `.env.example`.
+- [ ] `Makefile`: цель `make run-speech-server` (опционально).
+- [ ] `BotApp`: хендлер `F.voice`, скачивание OGG, индикатор «печатает», HTTP STT → `FinanceManager.handle_user_message`.
+- [ ] Обработка ошибок STT (сеть, 5xx, пустой текст): безопасные сообщения, логирование, бот не падает.
+- [ ] Приветствие `/start`: упоминание голосовых сообщений.
+- [ ] GPU‑ВМ: открыть порт STT (напр. `11435`), **порт 22 не закрывать**; systemd unit для `speech_server` (опционально).
+- [ ] Проверка: бот локально, STT на `176.99.135.118` — голосовое «кофе 350» → запись как у текста.
+- [ ] Проверка: STT недоступен / пустое аудио → понятная ошибка, предложение написать текстом.
 

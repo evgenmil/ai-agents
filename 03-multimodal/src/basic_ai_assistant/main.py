@@ -7,6 +7,7 @@ from basic_ai_assistant.finance.ledger import Ledger
 from basic_ai_assistant.logging_config import setup_logging
 from basic_ai_assistant.llm.llm_client import LlmClient
 from basic_ai_assistant.llm.llm_trace_logger import LlmTraceLogger
+from basic_ai_assistant.speech.speech_client import SpeechClient
 from basic_ai_assistant.telegram_bot.bot_app import BotApp
 
 
@@ -31,7 +32,18 @@ def main() -> None:
         ledger=ledger,
         system_prompt=config.system_prompt,
     )
-    app = BotApp(config=config, finance_manager=finance_manager)
+    speech_client: SpeechClient | None = None
+    if config.speech_api_url:
+        speech_client = SpeechClient(
+            api_url=config.speech_api_url,
+            api_key=config.speech_api_key,
+        )
+
+    app = BotApp(
+        config=config,
+        finance_manager=finance_manager,
+        speech_client=speech_client,
+    )
 
     asyncio.run(app.run())
 

@@ -70,6 +70,26 @@ SYSTEM_PROMPT_PATH=prompts/system_prompt.txt
   - если обе переменные не заданы — используется встроенный промпт по умолчанию.
 - Текст промпта можно править в `prompts/system_prompt.txt` без пересборки образа (при `make docker-run` каталог монтируется в контейнер).
 
+### Голосовые сообщения (STT на GPU-ВМ)
+
+Бот и транскрибатор работают **на разных машинах**. На GPU-сервере — HTTP STT (`faster-whisper`, `ffmpeg`, CUDA); в `.env` бота — только `SPEECH_API_URL` (например `http://176.99.135.118:11435`).
+
+На GPU-ВМ (см. [docs/prompts/vm-setup-speech.md](docs/prompts/vm-setup-speech.md)):
+
+```env
+SPEECH_MODEL=large-v3
+SPEECH_DEVICE=cuda
+SPEECH_COMPUTE_TYPE=float16
+SPEECH_LANGUAGE=ru
+SPEECH_HOST=0.0.0.0:11435
+```
+
+```bash
+make run-speech-server
+```
+
+Откройте порт **11435** в firewall облака; **SSH (22) не закрывать**.
+
 ### 3. Запуск локально
 
 ```bash

@@ -38,6 +38,8 @@ class Config:
     system_prompt: str | None = None
     llm_trace_enabled: bool = False
     llm_trace_dir: str = "logs"
+    speech_api_url: str | None = None
+    speech_api_key: str | None = None
 
     @staticmethod
     def _parse_bool_env(name: str, default: bool = False) -> bool:
@@ -125,12 +127,19 @@ class Config:
         llm_trace_enabled = cls._parse_bool_env("LLM_TRACE_ENABLED")
         llm_trace_dir = (os.environ.get("LLM_TRACE_DIR") or "logs").strip() or "logs"
 
+        speech_api_url = (os.environ.get("SPEECH_API_URL") or "").strip() or None
+        speech_api_key = (os.environ.get("SPEECH_API_KEY") or "").strip() or None
+
         logger.info("MODEL_TEXT: %s", model_text)
         logger.info("MODEL_IMAGE: %s", model_image)
         if llm_trace_enabled:
             logger.info("LLM trace включён, каталог: %s", llm_trace_dir)
         else:
             logger.info("LLM trace выключен (LLM_TRACE_ENABLED не задан)")
+        if speech_api_url:
+            logger.info("STT API: %s", speech_api_url)
+        else:
+            logger.info("SPEECH_API_URL не задан — голосовые сообщения отключены")
 
         return cls(
             telegram_bot_token=telegram_bot_token,
@@ -141,4 +150,49 @@ class Config:
             system_prompt=system_prompt,
             llm_trace_enabled=llm_trace_enabled,
             llm_trace_dir=llm_trace_dir,
+            speech_api_url=speech_api_url,
+            speech_api_key=speech_api_key,
+        )
+
+
+@dataclass
+class SpeechServerConfig:
+    """Конфигурация HTTP STT-сервера на GPU-ВМ."""
+
+    model: str
+    device: str
+    compute_type: str
+    language: str
+    host: str
+    port: int
+    api_key: str | None = None
+
+    @staticmethod
+    def _parse_host_port(raw: str) -> tuple[str, int]:
+        value = raw.strip()
+        if not value:
+            return "0.0.0.0", 11435
+        if ":" in value:
+            host_part, port_part = value.rsplit(":", 1)
+            return host_part or "0.0.0.0", int(port_part)
+        return value, 11435
+
+    @classmethod
+    def from_env(cls) -> "SpeechServerConfig":
+        model = (os.environ.get("SPEECH_MODEL") or "large-v3").strip()
+        device = (os.environ.get("SPEECH_DEVICE") or "cuda").strip()
+        compute_type = (os.environ.get("SPEECH_COMPUTE_TYPE") or "float16").strip()
+        language = (os.environ.get("SPEECH_LANGUAGE") or "ru").strip()
+        host_raw = (os.environ.get("SPEECH_HOST") or "0.0.0.0:11435").strip()
+        host, port = cls._parse_host_port(host_raw)
+        api_key = (os.environ.get("SPEECH_API_KEY") or "").strip() or None
+
+        return cls(
+            model=model,
+            device=device,
+            compute_type=compute_type,
+            language=language,
+            host=host,
+            port=port,
+            api_key=api_key,
         )

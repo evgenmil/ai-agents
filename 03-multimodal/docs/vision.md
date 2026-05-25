@@ -10,6 +10,7 @@
 - **Работа с LLM**: официальный клиент `openai`, настроенный через `base_url` и API‑ключ из переменных окружения. Один и тот же клиент работает с OpenRouter и с локальным Ollama (OpenAI‑совместимый endpoint `/v1`).
 - **Structured output**: извлечение транзакций из текста — через `response_format` (JSON Schema) и Pydantic‑схемы.
 - **VLM**: обработка фото чеков — vision‑запрос к модели из `MODEL_IMAGE` с тем же structured output.
+- **STT (голос)**: транскрибация на **отдельной GPU‑ВМ** через HTTP‑сервис (`faster-whisper` + `ffmpeg` на сервере). Бот на своей машине только скачивает голос из Telegram и вызывает `SPEECH_API_URL`; Whisper и CUDA на хосте бота **не** требуются.
 - **Интеграция с Telegram**: `aiogram`, только режим `polling` для простоты (без вебхуков и дополнительного веб‑сервера).
 - **Локальный запуск без Docker**: `make` вызывает `uv run` с основным entrypoint модуля приложения.
 - **Локальный запуск в Docker**: `Dockerfile` на базе `python:3.11-slim`, внутри — установка `uv`, установка зависимостей и запуск того же entrypoint, что и локально.
@@ -26,6 +27,7 @@
 - **Разделение зон ответственности без оверинжиниринга**
   - Модуль/пакет для работы с Telegram (`aiogram` и обработка апдейтов).
   - Модуль/пакет для работы с LLM (structured output, vision).
+  - Пакет `speech` — клиент удалённого STT и (на GPU‑ВМ) HTTP‑сервер транскрибации; без бизнес‑логики.
   - Пакет `finance` — учёт транзакций и бизнес‑логика советника.
   - `FinanceManager` — ядро: контекст диалога, вызов LLM, сохранение транзакций, ответы пользователю.
 - **Простота тестирования и отладки**
@@ -57,7 +59,12 @@
     - `logging_config.py` — инициализация базового логирования.
     - `telegram_bot/`
       - `__init__.py`
-      - `bot_app.py` — настройка `aiogram`, обработка текста, фото и команд (`/start`, `/balance`).
+      - `bot_app.py` — настройка `aiogram`, обработка текста, голоса, фото и команд (`/start`, `/balance`).
+    - `speech/`
+      - `__init__.py`
+      - `speech_client.py` — HTTP‑клиент к STT‑сервису (`POST` с аудио → plain text).
+      - `speech_server.py` — минимальный HTTP‑сервер на GPU‑ВМ (`faster-whisper`, `ffmpeg`).
+      - `audio_converter.py` — конвертация OGG → WAV через `ffmpeg` (выполняется **на STT‑сервере**).
     - `llm/`
       - `__init__.py`
       - `llm_client.py` — обёртка над `openai`: structured completion и vision.
@@ -77,15 +84,15 @@
 
 ## 4. Архитектура проекта
 
-Архитектура предельно простая и разделена на четыре зоны:
+Архитектура предельно простая и разделена на пять зон:
 
 1. **Telegram‑слой** (`BotApp`)
-   - Получает апдейты (текст, фото, команды) через `aiogram`.
-   - Скачивает фото чеков через Telegram API.
-   - Не содержит бизнес‑логики; делегирует вызовы `FinanceManager`.
+   - Получает апдейты (текст, голос, фото, команды) через `aiogram`.
+   - Скачивает фото чеков и голосовые сообщения через Telegram API.
+   - Не содержит бизнес‑логики; делегирует вызовы `SpeechClient` и `FinanceManager`.
 2. **Ядро** (`FinanceManager`)
    - Хранит полный контекст диалога для каждого пользователя (`UserSession`).
-   - Маршрутизирует: команда `/balance` → расчёт баланса; текст → structured output; фото → VLM.
+   - Маршрутизирует: команда `/balance` → расчёт баланса; текст (в т.ч. после STT) → structured output; фото → VLM.
    - Сохраняет транзакции в `Ledger`, формирует ответ пользователю.
 3. **Финансы** (`Ledger`, `Transaction`)
    - In-memory таблица транзакций: один `Ledger` на процесс, записи разделены по `user_id`.
@@ -94,13 +101,17 @@
    - Structured completion для текста (`MODEL_TEXT`).
    - Vision completion для изображений (`MODEL_IMAGE`).
    - Единый endpoint через `OPENROUTER_BASE_URL`.
+5. **Speech‑слой** (`SpeechClient` на боте, `speech_server` на GPU‑ВМ)
+   - Бот отправляет скачанное голосовое (OGG) на STT‑сервис по `SPEECH_API_URL`.
+   - GPU‑ВМ конвертирует и распознаёт; возвращает только plain text.
+   - Не извлекает суммы и категории — это делает `FinanceManager` через `MODEL_TEXT`, как для обычного текста.
 
 Высокоуровневый поток данных:
 
-1. Пользователь отправляет текст, фото или команду в Telegram.
-2. `BotApp` получает апдейт и вызывает `FinanceManager`.
-3. `FinanceManager` обновляет контекст диалога и при необходимости вызывает `LlmClient`.
-4. `LlmClient` делает запрос к API (OpenRouter или Ollama) и возвращает structured result.
+1. Пользователь отправляет текст, голос, фото или команду в Telegram.
+2. `BotApp` получает апдейт; для голоса — скачивает OGG, вызывает `SpeechClient.transcribe` (HTTP на GPU‑ВМ).
+3. `FinanceManager` получает текст (напрямую или после STT), обновляет контекст и при необходимости вызывает `LlmClient`.
+4. `LlmClient` делает запрос к API (OpenRouter или Ollama) и возвращает structured result; для чека — vision к `MODEL_IMAGE`.
 5. `FinanceManager` сохраняет транзакцию в `Ledger` (если применимо) и формирует ответ.
 6. `BotApp` отправляет ответ пользователю в Telegram.
 
@@ -195,11 +206,42 @@ LLM выбирает тип по контексту сообщения или ч
    - `transaction`: поля `Transaction`
    - `reply`: подтверждение или сообщение об ошибке распознавания
 
-### 6.4. Обработка ошибок
+Один вызов VLM: модель и «читает» чек, и возвращает structured output.
+
+### 6.4. Speech-to-Text (голосовые сообщения)
+
+Отличие от чека: **два этапа** — сначала только текст (удалённый STT), затем тот же путь, что у текстового сообщения.
+
+**Раздельный деплой (продакшен):**
+
+| Машина | Роль | Что запущено |
+|--------|------|----------------|
+| Хост бота (Windows / Docker / VPS) | Telegram polling, `FinanceManager`, `LlmClient` | `make run` — **без** CUDA, **без** `faster-whisper` |
+| GPU‑ВМ (immers.cloud) | LLM (Ollama) + STT | Ollama `:11434`, STT‑сервис `:11435` (порт уточняется в firewall) |
+
+Поток:
+
+1. `BotApp` получает `message.voice`, скачивает OGG Opus через Telegram API.
+2. `SpeechClient` отправляет байты аудио на `SPEECH_API_URL` (например `POST /v1/transcribe`, `multipart/form-data`, поле `file`).
+3. На GPU‑ВМ `speech_server`: `ffmpeg` (OGG → WAV 16 kHz mono) → `faster-whisper` (`SPEECH_MODEL`, `SPEECH_DEVICE=cuda`).
+4. Ответ JSON: `{"text": "..."}`; бот передаёт текст в `FinanceManager.handle_user_message`.
+5. Далее `MODEL_TEXT` через `OPENROUTER_BASE_URL` (Ollama на той же GPU‑ВМ) и `ParsedTextMessage`.
+6. В истории диалога голосовая реплика хранится как **расшифрованный текст**.
+
+Голос по сети уходит **только на ваш STT‑сервер** (не в OpenAI Whisper API и не в OpenRouter). Рекомендуется HTTPS или VPN; опционально общий секрет `SPEECH_API_KEY` в заголовке.
+
+**STT‑сервер (GPU‑ВМ):** модель Whisper загружается при старте `speech_server` один раз; в `.env` сервера — `SPEECH_MODEL`, `SPEECH_DEVICE`, `SPEECH_COMPUTE_TYPE`, `SPEECH_LANGUAGE`, `SPEECH_HOST`.
+
+**Бот (любая машина):** в `.env` только `SPEECH_API_URL` (и при необходимости `SPEECH_API_KEY`); `ffmpeg` на хосте бота **не** нужен.
+
+**Разработка без GPU‑ВМ:** STT‑сервер можно поднять локально с `SPEECH_DEVICE=cpu` и моделью `small`; бот указывает `SPEECH_API_URL=http://127.0.0.1:11435`.
+
+### 6.5. Обработка ошибок
 
 - Ошибки LLM логируются.
 - Пользователю возвращается безопасное сообщение («Сервис временно недоступен, попробуйте позже»).
 - При неудачном распознавании чека — просьба отправить фото повторно или описать трату текстом.
+- При ошибке STT (нет `ffmpeg`, сбой CUDA, пустая расшифровка) — понятное сообщение и предложение повторить голосовое или написать текстом; ошибки логируются, бот не падает.
 
 ## 7. Сценарии работы
 
@@ -218,7 +260,15 @@ LLM выбирает тип по контексту сообщения или ч
 3. VLM (`MODEL_IMAGE`) извлекает транзакцию через structured output.
 4. `Ledger` сохраняет, бот подтверждает запись.
 
-### 7.3. Запрос баланса
+### 7.3. Голосовое сообщение
+
+1. Пользователь отправляет голосовое (например: «потратил триста пятьдесят на кофе»).
+2. `BotApp` скачивает voice, конвертирует в WAV, вызывает `SpeechClient` (локально на GPU).
+3. Расшифровка передаётся в `FinanceManager.handle_user_message` как обычный текст.
+4. `MODEL_TEXT` возвращает `intent`, `transaction`, `reply`; при `record_transaction` — запись в `Ledger`.
+5. Бот отвечает подтверждением (как после текстовой записи).
+
+### 7.4. Запрос баланса
 
 **Явная команда** `/balance`:
 
@@ -231,19 +281,19 @@ LLM выбирает тип по контексту сообщения или ч
 1. LLM определяет `intent=balance_query` через structured output.
 2. Далее — тот же расчёт и ответ.
 
-### 7.4. Диалог с полным контекстом
+### 7.5. Диалог с полным контекстом
 
 1. Пользователь ведёт непрерывный диалог (уточнения, вопросы, несколько записей подряд).
 2. `FinanceManager` хранит и передаёт в LLM полную историю сообщений сессии.
 3. Бот учитывает предыдущие реплики при интерпретации новых сообщений.
 
-### 7.5. Ошибка при обращении к LLM
+### 7.6. Ошибка при обращении к LLM
 
 1. При запросе к API возникает ошибка (таймаут, неверный ключ, лимит).
 2. `LlmClient` логирует ошибку, возвращает информацию в `FinanceManager`.
 3. Пользователю — безопасное сообщение об недоступности сервиса.
 
-### 7.6. Ошибка при работе с Telegram API
+### 7.7. Ошибка при работе с Telegram API
 
 1. Исключение при отправке/получении логируется.
 2. Бот продолжает работу где возможно; при критических ошибках процесс завершается.
@@ -261,6 +311,13 @@ LLM выбирает тип по контексту сообщения или ч
 | `OPENROUTER_BASE_URL` | Base URL API; по умолчанию `https://openrouter.ai/api/v1` |
 | `MODEL_TEXT` | Модель для текста и structured output |
 | `MODEL_IMAGE` | Vision‑модель для обработки чеков |
+| `SPEECH_API_URL` | Base URL STT‑сервиса на GPU‑ВМ (напр. `http://176.99.135.118:11435`); **только на машине бота** |
+| `SPEECH_API_KEY` | Опциональный общий секрет бот → STT (заголовок `Authorization: Bearer …`) |
+| `SPEECH_MODEL` | Имя модели Whisper — **только на STT‑сервере** (напр. `large-v3`) |
+| `SPEECH_DEVICE` | `cuda` / `cpu` — **только на STT‑сервере** |
+| `SPEECH_COMPUTE_TYPE` | CTranslate2 (напр. `float16`) — **только на STT‑сервере** |
+| `SPEECH_LANGUAGE` | Язык распознавания; по умолчанию `ru` — **на STT‑сервере** |
+| `SPEECH_HOST` | Адрес bind STT‑сервера (напр. `0.0.0.0:11435`) — **только на STT‑сервере** |
 | `LOG_LEVEL` | Уровень логирования (`INFO`, `DEBUG`, `WARNING`) |
 | `LLM_TRACE_ENABLED` | `true` / `1` — полный trace запросов и ответов LLM в файлы `logs/llm_trace_{user_id}.txt` |
 | `LLM_TRACE_DIR` | Каталог trace-файлов; по умолчанию `logs` |
@@ -281,17 +338,34 @@ MODEL_TEXT=openai/gpt-4o-mini
 MODEL_IMAGE=openai/gpt-4o
 ```
 
-**Продакшен (Ollama на GPU‑сервере):**
+**Продакшен — бот на своей машине (Windows / Docker):**
 
 ```
 TELEGRAM_BOT_TOKEN=...
 OPENROUTER_API_KEY=ollama
-OPENROUTER_BASE_URL=http://gpu-server:11434/v1
-MODEL_TEXT=llama3.1:8b
-MODEL_IMAGE=llava:13b
+OPENROUTER_BASE_URL=http://176.99.135.118:11434/v1
+MODEL_TEXT=qwen2.5:7b-instruct
+MODEL_IMAGE=qwen3-vl:8b-instruct
+SPEECH_API_URL=http://176.99.135.118:11435
+SPEECH_API_KEY=...   # опционально, тот же секрет, что на STT-сервере
 ```
 
-Переключение провайдера — только сменой `OPENROUTER_BASE_URL` и моделей; код бота не меняется.
+**Продакшен — STT‑сервер на GPU‑ВМ** (отдельный процесс, не `make run` бота):
+
+```
+SPEECH_MODEL=large-v3
+SPEECH_DEVICE=cuda
+SPEECH_COMPUTE_TYPE=float16
+SPEECH_LANGUAGE=ru
+SPEECH_HOST=0.0.0.0:11435
+SPEECH_API_KEY=...   # опционально
+```
+
+Запуск STT на ВМ: `uv run python -m basic_ai_assistant.speech.speech_server` (после итерации 15).
+
+На GPU‑ВМ: CUDA, `ffmpeg`, `faster-whisper`. Docker‑образ бота (`python:3.11-slim`) **не** содержит GPU/Whisper — это нормально: бот ходит в Ollama и STT по HTTP.
+
+Переключение LLM — сменой `OPENROUTER_BASE_URL` и моделей. Адрес STT — сменой `SPEECH_API_URL`; код бота не меняется.
 
 Класс `Config` отвечает за чтение переменных, значения по умолчанию и валидацию обязательных параметров.
 
@@ -303,7 +377,7 @@ MODEL_IMAGE=llava:13b
 - Логи выводятся в stdout (удобно для локальной разработки и Docker).
 - `INFO` — старт бота, входящие сообщения, сохранение транзакций.
 - `WARNING` — нестандартные, но некритичные ситуации.
-- `ERROR` — исключения и проблемы с внешними сервисами (Telegram, LLM).
+- `ERROR` — исключения и проблемы с внешними сервисами (Telegram, LLM, удалённый STT).
 - Уровень задаётся через `LOG_LEVEL`.
 
 ## 10. Сборка и локальный запуск (make + Docker)
