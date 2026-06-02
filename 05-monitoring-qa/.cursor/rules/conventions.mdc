@@ -1,0 +1,15 @@
+---
+description: Конвенции RAG-ассистента — см. docs/vision.md
+alwaysApply: true
+---
+
+# Конвенции разработки
+
+- **Источник правды**: архитектура, стек и сценарии — в `docs/vision.md`; идея продукта — в `docs/idea.md`; план итераций — в `docs/tasklist.md`.
+- **Стек**: Python 3.11+, `uv`, `aiogram` (polling), LangChain, OpenRouter (`OPENAI_BASE_URL`), `make` для команд. Новые зависимости только если описаны в vision (langsmith, ragas, datasets).
+- **Структура**: плоская папка `src/` без пакетов; прямые импорты, глобальные `vector_store` / `retriever`, без DI и лишних абстракций.
+- **KISS / YAGNI**: минимальный diff, без оверинжиниринга; не добавлять функции «на будущее».
+- **Конфигурация**: секреты и флаги только в `.env` через `config.py`; LangSmith-трейсинг — переменными `LANGSMITH_*` (код трейсинга не писать).
+- **RAG**: цепочка возвращает `answer` + `documents`; источники в Telegram — только при `SHOW_SOURCES=true`.
+- **Evaluation**: RAGAS-метрики и upload feedback — в `evaluation.py`; синтез датасета — в `dataset_synthesizer.py`; модели RAGAS — `RAGAS_LLM_MODEL`, `RAGAS_EMBEDDING_MODEL`.
+- **Логирование**: стандартный `logging`, без structlog; пользователю — безопасные сообщения об ошибках.
