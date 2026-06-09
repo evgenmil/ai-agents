@@ -1,0 +1,15 @@
+---
+description: Конвенции RAG-ассистента — см. docs/vision.md
+alwaysApply: true
+---
+
+# Конвенции разработки
+
+- **Источник правды**: архитектура, стек, режимы retrieval и конфигурация — в `docs/vision.md`; идея продукта — в `docs/idea.md`; план итераций — в `docs/tasklist.md`.
+- **Стек**: Python 3.11+, `uv`, `aiogram` (polling), LangChain (LCEL), OpenRouter, `make`. Зависимости — по `docs/vision.md` (в т.ч. `sentence-transformers`, `langchain-community`, `rank-bm25`, `langchain-huggingface`).
+- **Структура**: плоская `src/`; retrieval в `retrieval.py`, reranker в `reranker.py`, эмбеддинги в `embeddings.py`; без пакетов, DI и лишних абстракций.
+- **KISS / YAGNI**: минимальный diff; три режима retrieval (`semantic`, `hybrid`, `hybrid+reranker`) — без расширения сверх vision.
+- **Конфигурация**: только `.env` → `config.py`; имена моделей и k/веса — через env; LangSmith — `LANGSMITH_*`.
+- **RAG**: LCEL-цепочка сохраняет query transformation по истории; возвращает `answer` + `documents`; reranker — только при `RETRIEVAL_MODE=hybrid+reranker`.
+- **Evaluation / датасеты**: `evaluation.py`, `dataset_synthesizer.py`; провайдер RAGAS-эмбеддингов — `RAGAS_EMBEDDING_PROVIDER`.
+- **Логирование**: стандартный `logging`; пользователю — безопасные сообщения об ошибках.
