@@ -1,0 +1,16 @@
+---
+description: Конвенции ReAct-агента — см. docs/vision.md
+alwaysApply: true
+---
+
+# Конвенции разработки
+
+- **Источник правды**: `docs/vision.md` (архитектура, стек, конфиг); `docs/idea.md` (продукт); `docs/tasklist.md` (план итераций).
+- **Стек и зависимости**: по `docs/vision.md` — Python 3.11+, `uv`, `aiogram` (polling), LangChain 1.0 (`create_agent`, `@tool`, `MemorySaver`), OpenRouter, `make`.
+- **Структура**: плоская `src/`; агент в `agent.py`, инструмент в `tools.py`, retrieval/reranker/embeddings — без пакетов и DI.
+- **KISS / YAGNI**: минимальный diff; один инструмент `rag_search`; три режима retrieval — без расширения сверх vision.
+- **Конфигурация**: только `.env` → `config.py`; LangSmith — `LANGSMITH_*`.
+- **Агент**: `create_agent()` + `MemorySaver`; история по `thread_id`; ответ через `stream(stream_mode="values")`; fallback при пустом ответе.
+- **rag_search**: JSON `{"sources": [...]}` с `page_content`; sources для evaluation — только из текущего запроса (после последнего `HumanMessage`).
+- **Evaluation**: полностью async; уникальный `thread_id` на пример; contexts = `page_content`.
+- **Логирование**: стандартный `logging`; пользователю — безопасные сообщения об ошибках.
