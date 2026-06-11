@@ -1,0 +1,17 @@
+---
+description: Конвенции ReAct-агента — см. docs/vision.md
+alwaysApply: true
+---
+
+# Конвенции разработки
+
+- **Источник правды**: `docs/vision.md` (архитектура, стек, конфиг); `docs/idea.md` (продукт); `docs/tasklist.md` (план итераций).
+- **Стек**: Python 3.11+, `uv`, `aiogram` (polling), LangChain 1.0 (`create_agent`, `@tool`, `MemorySaver`), `langchain-mcp-adapters`, FastMCP, OpenRouter, `make` — детали в `docs/vision.md`.
+- **Структура**: плоская `src/`; MCP-сервер — подпроект `mcp/mcp-bank-agent/`; без пакетов и DI.
+- **KISS / YAGNI**: минимальный diff; без расширения сверх `docs/vision.md`.
+- **Агент**: `async create_bank_agent()` + `async initialize_agent()`; `await mcp_client.get_tools()`; graceful degradation без MCP; `stream(stream_mode="values")`; fallback при пустом ответе.
+- **Инструменты**: локальные (`rag_search`, `currency_convert` в `tools.py`); MCP (`search_products`, `loan_calc` через `MultiServerMCPClient`).
+- **rag_search**: JSON `{"sources": [...]}` с `page_content`; sources для evaluation — только из текущего запроса.
+- **Запуск**: `make run-mcp-bank` (терминал 1) → `make run` (терминал 2).
+- **Конфигурация**: `.env` → `config.py`; LangSmith — `LANGSMITH_*`.
+- **Логирование**: стандартный `logging`; пользователю — безопасные сообщения об ошибках.
